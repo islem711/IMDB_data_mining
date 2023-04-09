@@ -1,0 +1,456 @@
+---
+title: "movies_rating_study"
+output: html_notebook
+---
+
+```{r}
+#les packages a installer 
+#install.packages(ggplot2)
+#install.packages(dplyr)
+#install.packages(tidyr)
+#install.packages(arules)
+#install.packages(fastDummies)
+#install.packages(plotly)
+#install.packages(stringr)
+```
+
+
+```{r}
+
+#importer et fusionner la base de données
+setwd("C:/Users/utilisateur/Desktop/data_mining_project")
+directory <- "./dataset"
+files <- list.files(directory, pattern = ".csv")
+data_list <- lapply(files, function(file) read.csv(file.path(directory, file)))
+mydata <- do.call(rbind, data_list)
+
+mydata
+```
+
+
+```{r}
+#nettoyage de la bdd
+library(tidyr)
+library(fastDummies)
+
+#drop les attribut qui vont pas nous servir dans notre etude
+mydata$gross.in... <- NULL
+mydata$star_id <- NULL
+mydata$director_id <- NULL
+mydata$description <- NULL
+
+
+#on supprime les films qui n'ont pas rating
+mydata <- mydata[complete.cases(mydata$rating), ]
+
+#on supprime les films qui n'ont pas runtime
+mydata <- mydata[complete.cases(mydata$runtime), ]
+
+#on supprime les films qui n'ont pas votes
+mydata <- mydata[complete.cases(mydata$votes), ]
+
+# on supprime les valeurs null dans la table (NA)
+mydata <- na.omit(mydata)
+
+#on supprime les doublons
+mydata <- unique(mydata, by = "movie_id")
+
+# enlever le mot 'min' de "runtime" et changer son type
+mydata$runtime <- gsub("min", "", mydata$runtime)
+
+# Convertir la colonne "runtime" en type numérique
+mydata$runtime <- as.numeric(mydata$runtime)
+
+# Convertir la colonne "year" en type numérique
+mydata$year <- as.numeric(mydata$year)
+
+colSums(is.na(mydata))
+
+# utiliser separate() pour créer une colonne pour chaque valeur dans "genres"
+mydata <- mydata %>% separate_rows(genre, sep = ", ") %>%
+  pivot_wider(names_from = genre, values_from = genre, values_fn = length, values_fill = 0)
+
+
+mydata
+```
+
+```{r}
+# on separe les different certificat (chaque une sur une colonne)
+mydata <- dummy_cols(mydata, select_columns = "certificate")
+#on drop certificate et star
+mydata$certificate <- NULL
+mydata$star <- NULL
+mydata
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+# Compter le nombre de films par rating
+film_per_rating <- mydata %>% 
+  group_by(rating) %>% 
+  summarize(n = n())
+
+# Tracer un histogramme du rating des films
+ggplot(data = film_per_rating, aes(x = rating, y = n)) +
+  geom_bar(stat = "identity", color = "red", fill = "blue", alpha = 0.5) +
+  labs(title = "Histogramme du rating des films", x = "Rating", y = "Nombre de films")
+```
+on remarqe que nos données ont une distribution normale centrée sur la valeur 6,
+cela veut dire qu'il y'a plus de probalibité pour un futur film qu'il soit noté 6/10 que autre chose.
+
+de la on peu considérer qu'un film qui a un (RATING >=8) est un film reussi et (RATING <=4) est un echec
+
+```{r}
+
+#on prends une copie de la dataframe (pour analyser les artists)
+
+mydata$movie_name <- NULL
+mydata$movie_id <- NULL
+mydata$director <- NULL
+
+# installer et charger la librairie arules
+library(arules)
+
+# créer une matrice binaire de transactions à partir de la dataframe
+transactions_mat <- as.matrix(mydata)
+
+# remplacer les valeurs manquantes par 0
+transactions_mat[is.na(transactions_mat)] <- 0
+transactions_mat[transactions_mat > 0] <- 1
+
+# convertir la matrice de transactions en un objet "transactions" de la librairie arules
+transactions_obj <- as(transactions_mat, "transactions")
+
+# appliquer la fonction apriori pour extraire les règles d'association
+rules <- apriori(transactions_obj, parameter = list(support = 0.1, confidence = 0.5, minlen = 2))
+
+# afficher les règles d'association
+inspect(rules)
+```
+
+d'apres les resultat de l'algorithme apriori on voit qu'il y'a une relation forte entre {rating} et {year/runtime/votes} ainsi que les differents genre qu'on dans la dataframe
+cela est vu grace au mesure (support/confiance/lift) (plus leur valeurs est élevé plus la relation est forte)
+
+-Le support (ou soutien) est une mesure de la fréquence d'apparition d'un itemset dans un ensemble de transactions
+
+-La confiance est une mesure de la probabilité conditionnelle d'observer le conséquent d'une règle sachant que l'antécédent est présent
+
+-Le lift est une mesure de l'association entre l'antécédent et le conséquent d'une règle
+
+                    support    confidence    coverage    lift  
+year => rating     0.9998679	 1.0000000	  0.9998679	 1.0000000	
+runtime => rating  0.9199087   1.0000000    0.9199087	 1.0000000	
+votes	=>	rating	 1.0000000	 1.0000000	  1.0000000	 1.0000000
+
+
+
+<h1> genre => rating </h1>
+
+```{r}
+library(plotly)
+
+# Calculer les proportions de chaque genre
+genres <- colSums(mydata[, 5:28]) / nrow(mydata)
+
+# Créer un vecteur de couleurs pour les secteurs
+colors <- c("#1f77b4", "#ff7f0e", "#2ca02c")
+
+# Créer un graphique camembert interactif avec plotly
+plot_ly(
+  labels = names(genres),
+  values = genres,
+  type = "pie",
+  marker = list(colors = colors),
+  textposition = "inside",
+  
+  
+  textinfo = "percent+label",
+  hoverinfo = "label+percent",
+  title = "Genres des films"
+)
+```
+
+
+```{r}
+mydata_3 <- mydata
+
+# renommer les colonnes à partir de la 13ème colonne jusqu'à la dernière colonne
+names(mydata_3)[5:28] <- paste0("genre_", names(mydata_3)[5:28])
+```
+
+on va s'interesser a trouver les type de films apprécié/non apprécié par les gens,
+
+(rating >= 8)
+```{r}
+# Récupérer les films avec rating >= 8
+rated_df <- filter(mydata_3, rating >= 8)
+
+# Sélectionner les colonnes des genres
+genre_cols <- names(rated_df)[5:28]
+
+# Compter le nombre de films par genre
+genre_counts <- colSums(rated_df[, genre_cols])
+
+# Créer un data frame avec les résultats
+genre_df <- data.frame(Genre = names(genre_counts), 
+                       Count = genre_counts)
+
+# Créer le graphique à barres interactif avec Plotly
+plot_ly(genre_df, x = ~Genre, y = ~Count, type = 'bar', 
+        name = "Genres", marker = list(color = 'blue'),
+        xaxis = list(title = "Genres"), 
+        yaxis = list(title = "Nombre de films"),
+        text = ~paste("Genre: ", Genre, "<br>", "Count: ", Count)) %>%
+  layout(title = "Distribution des genres pour les films avec un rating >= 8")
+```
+
+(rating <=4)
+
+```{r}
+# Récupérer les films avec rating >= 8
+rated_df <- filter(mydata_3, rating <= 4)
+
+# Sélectionner les colonnes des genres
+genre_cols <- names(rated_df)[5:28]
+
+# Compter le nombre de films par genre
+genre_counts <- colSums(rated_df[, genre_cols])
+
+# Créer un data frame avec les résultats
+genre_df <- data.frame(Genre = names(genre_counts), 
+                       Count = genre_counts)
+
+# Créer le graphique à barres interactif avec Plotly
+plot_ly(genre_df, x = ~Genre, y = ~Count, type = 'bar', 
+        name = "Genres", marker = list(color = 'red'),
+        xaxis = list(title = "Genres"), 
+        yaxis = list(title = "Nombre de films"),
+        text = ~paste("Genre: ", Genre, "<br>", "Count: ", Count)) %>%
+  layout(title = "Distribution des genres pour les films avec un rating <= 4")
+```
+
+on voit clairement que le genre Drama prend la premiere place avec 2330 films ayant plus que 8 de rating 
+cela veut dire que le "genres" des film peut avoir une influence sur le rating 
+
+EX: un film de gerne "DRAMA" a beaucoup plus de chance d'avoir un rating élevé qu'un film de genre "NEWS"
+
+aussi on peut voir que les films d'horreur des notes plus basses que les films de comédie ou de drame. Cela peut être dû au fait que les films d'horreur ont un public plus limité et peuvent être moins populaires auprès de la majorité des utilisateurs d'IMDb
+
+<h1> yea(r => rating </h1>
+
+```{r}
+#Créer une nouvelle colonne pour l'année décennale
+mydata_3$decade <- as.integer(floor(mydata_3$year/10) * 10)
+
+ggplot(mydata_3, aes(x = decade, y = rating, color = rating)) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE)
+```
+
+on peut remarquer que les films plus anciens ont des notes plus élevées que les films plus récents. Cela peut être dû à la nostalgie ou au fait que les films plus anciens ont eu plus de temps pour devenir des classiques et par la suite etre bien noté.
+
+ce qui est interressant avec ce plot c'est qu'on peut voir que plus on avance avec les années plus il y'a des film avec des rating entre [9 - 10] 
+mais vu la moyenne (en baisse),on est certain que ca compense de l'autre coté (mauvaises notes) donc on a aussi beaucoup de films ayant des tres mauvaises notes
+
+d'autre facteur peuve affecter le rating concernant le temps de sortie des films,les saison par example (été/hiver) peuvent affecter les stats des film, mais dans cette bdd on a pas malheureusement cette information 
+
+
+<h1> runtime => rating </h1>
+
+```{r}
+#Comportement des rating en fonction des runtime
+mean_ratings <- aggregate(rating ~ runtime, mydata_3, mean)
+
+ggplot(mean_ratings, aes(x=runtime, y=rating)) +
+  # ajouter une courbe
+  geom_line() +
+  # ajouter une étiquette pour l'axe x
+  xlab("Runtime") +
+  # ajouter une étiquette pour l'axe y
+  ylab("Rating moyen") +
+  # ajouter un titre
+  ggtitle("Comportement des ratings moyens en fonction des runtimes")
+```
+de cette courbe on peut voir que les meilleur rating sont atteint avec des film d'une durée courte 
+et que plus les films sont longs plus leur rating baisse. Cela peut être dû au fait que les films plus longs peuvent être moins engageants pour les utilisateurs, ou peuvent être perçus comme étant trop longs ou ennuyeux
+
+
+<h1> votes => rating </h1>
+```{r}
+
+#Comportement des rating en fonction des runtime
+mean_ratings <- aggregate(rating ~ votes, mydata_3, mean)
+
+ggplot(mean_ratings, aes(x=votes, y=rating)) +
+  geom_line() +
+  xlab("nbr_votes") +
+  ylab("Rating moyen") +
+  ggtitle("Comportement des ratings moyens en fonction des votes")
+```
+de ce graphic on peut clairement voir que Les films qui ont reçu un grand nombre de votes ont des notes plus stables et plus fiables que les films qui ont reçu un petit nombre de votes. Cela peut être dû au fait que les films qui ont reçu un grand nombre de votes sont plus représentatifs de l'opinion publique
+
+
+<h1> certificate => rating </h1>
+
+
+```{r}
+
+
+# Calculer les proportions de chaque genre
+certificateS <- colSums(mydata[, 30:72]) / nrow(mydata)
+
+# Créer un vecteur de couleurs comme pallette
+colors <- c("#1f77b4", "#ff7f0e", "#2ca02c")
+
+# Créer un graphique camembert interactif avec plotly
+plot_ly(
+  labels = names(certificateS),
+  values = certificateS,
+  type = "pie",
+  marker = list(colors = colors),
+  textposition = "inside",
+  
+  
+  textinfo = "percent+label",
+  hoverinfo = "label+percent",
+  title = "certificatsdes films"
+)
+```
+
+```{r}
+#on drop "certificate_R" et "certificate_Not Rated" pour voir plus clair
+mydata_3$`certificate_R` <- NULL
+mydata_3$`certificate_Not Rated` <- NULL
+```
+
+```{r}
+# Récupérer les films avec rating >= 8
+rated_df <- filter(mydata_3, rating >= 8)
+
+# Sélectionner les colonnes des certificate
+certificate_cols <- names(rated_df)[30:70]
+
+# Compter le nombre de films par certificate
+certificate_counts <- colSums(rated_df[, certificate_cols])
+
+# Créer un data frame avec les résultats
+certificate_df <- data.frame(Certificate = names(certificate_counts), 
+                       Count = certificate_counts)
+
+# Créer le graphique à barres interactif avec Plotly
+plot_ly(certificate_df, x = ~Certificate, y = ~Count, type = 'bar', 
+        name = "Certificates", marker = list(color = 'blue'),
+        xaxis = list(title = "Certificates"), 
+        yaxis = list(title = "Nombre de films"),
+        text = ~paste("Certificate: ", Certificate, "<br>", "Count: ", Count)) %>%
+  layout(title = "Distribution des certificates pour les films avec un rating >= 8")
+```
+```{r}
+# Récupérer les films avec rating <=4
+rated_df <- filter(mydata_3, rating <=4)
+
+# Sélectionner les colonnes des genres
+certificate_cols <- names(rated_df)[30:70]
+
+# Compter le nombre de films par certificate
+certificate_counts <- colSums(rated_df[, certificate_cols])
+
+# Créer un data frame avec les résultats
+certificate_df <- data.frame(Certificate = names(certificate_counts), 
+                       Count = certificate_counts)
+
+# Créer le graphique à barres interactif avec Plotly
+plot_ly(certificate_df, x = ~Certificate, y = ~Count, type = 'bar', 
+        name = "Certificates", marker = list(color = 'red'),
+        xaxis = list(title = "Certificates"), 
+        yaxis = list(title = "Nombre de films"),
+        text = ~paste("Certificate: ", Certificate, "<br>", "Count: ", Count)) %>%
+  layout(title = "Distribution des genres pour les films avec un rating <=4")
+
+```
+comme on peut le voir clairement, il existe des certification qui peuvent nous garantir le comportement du film (plutot son rating) comme par example si un film est certifié "TV_MA" cela veut dire que le film aura tres probablement un mauvais, car on la trouve beacoup ici dans les films qui ont de mauvais rating et presque pas du tout chez les film qui ont des bons ratings .
+
+<h1>Training a regression model</h1>
+
+```{r}
+mydata
+```
+```{r}
+#remove NA left in the dataframe
+mydata <- na.omit(mydata)
+#normaliser mes données
+mydata <- scale(mydata)
+#rendre mes données dataframe
+mydata <- data.frame(mydata)
+mydata
+```
+
+```{r}
+library('caret')
+# Split the dataset into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(mydata$rating, p = 0.8, list = FALSE)
+trainData <- mydata[trainIndex, ]
+testData <- mydata[-trainIndex, ]
+
+# Train the linear regression model on the training set
+lm_model <- train(rating ~ . , data = trainData, method = "lm")
+
+# Make predictions on the test set using the trained model
+predictions <- predict(lm_model, newdata = testData)
+
+# Calculate the root mean squared error (RMSE) to evaluate model performance
+rmse <- sqrt(mean((testData$rating - predictions)^2))
+
+# Print the RMSE value
+print(paste0("RMSE: ", rmse))
+
+
+
+```
+
+```{r}
+
+# Split the data into training and testing sets (70/30 split)
+set.seed(123) # for reproducibility
+train_index <- sample(1:nrow(mydata), size = round(0.7 * nrow(mydata)), replace = FALSE)
+train_data <- mydata[train_index, ]
+test_data <- mydata[-train_index, ]
+
+# Fit a linear regression model to the training data to predict rating
+model <- lm(rating ~ ., data = train_data)
+
+# Predict the rating values for the testing data using the trained model
+predictions <- predict(model, newdata = test_data)
+
+# Calculate the RMSE for the testing data
+rmse <- sqrt(mean((predictions - test_data$rating)^2))
+
+# Plot the learning process for the training data
+learning_curve <- data.frame(
+  iteration = 1:length(model$residuals),
+  rmse = sqrt(cumsum(model$residuals^2)/length(model$residuals))
+)
+
+ggplot(learning_curve, aes(x = iteration, y = rmse)) +
+  geom_line(color = "blue") +
+  labs(title = "Learning curve", x = "Iteration", y = "RMSE")
+# Print the RMSE for the testing data
+print(paste("RMSE on testing data:", rmse))
+
+
+# Initialiser les vecteurs de stockage pour la performance d'entraînement et de validation
+train_perf <- c()
+val_perf <- c()
+
+# Définir les tailles de sous-ensembles pour l'entraînement
+train_sizes <- seq(2, nrow(train), by = 2)
+
+# Tracer la courbe d'apprentissage
+plot(train_sizes, train_perf, type = "l", col = "blue", xlab = "Taille de l'ensemble d'entraînement", ylab = "RMSE")
+lines(train_sizes, val_perf, type = "l", col = "red")
+legend("topright", legend = c("Entraînement", "test"), col = c("blue", "red"), lty = 1)
+```
+
+
